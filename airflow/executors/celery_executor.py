@@ -219,9 +219,7 @@ class CeleryExecutor(BaseExecutor):
                 self.fail(key, info)
             elif state == celery_states.STARTED:
                 pass
-            elif state == celery_states.PENDING:
-                pass
-            else:
+            elif state != celery_states.PENDING:
                 self.log.info("Unexpected state for %s: %s", key, state)
         except Exception:
             self.log.exception("Error syncing the Celery executor, ignoring it.")
@@ -309,8 +307,7 @@ class CeleryExecutor(BaseExecutor):
             readable_tis.append(repr(ti))
             task_instance_key = ti.key
             self.fail(task_instance_key, None)
-            celery_async_result = self.tasks.pop(task_instance_key, None)
-            if celery_async_result:
+            if celery_async_result := self.tasks.pop(task_instance_key, None):
                 try:
                     app.control.revoke(celery_async_result.task_id)
                 except Exception as ex:

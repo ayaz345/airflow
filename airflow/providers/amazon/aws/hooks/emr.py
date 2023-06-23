@@ -131,9 +131,7 @@ class EmrHook(AwsBaseHook):
                 config = emr_conn.extra_dejson.copy()
         config.update(job_flow_overrides)
 
-        response = self.get_conn().run_job_flow(**config)
-
-        return response
+        return self.get_conn().run_job_flow(**config)
 
     def add_job_flow_steps(
         self,
@@ -276,7 +274,7 @@ class EmrServerlessHook(AwsBaseHook):
         for r in iterator:
             job_ids = [jr["id"] for jr in r["jobRuns"]]
             count += len(job_ids)
-            if len(job_ids) > 0:
+            if job_ids:
                 self.log.info(
                     "Cancelling %s pending job(s) for the application %s so that it can be stopped",
                     len(job_ids),
@@ -348,12 +346,11 @@ class EmrContainerHook(AwsBaseHook):
 
         if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
             raise AirflowException(f"Create EMR EKS Cluster failed: {response}")
-        else:
-            self.log.info(
-                "Create EMR EKS Cluster success - virtual cluster id %s",
-                response["id"],
-            )
-            return response["id"]
+        self.log.info(
+            "Create EMR EKS Cluster success - virtual cluster id %s",
+            response["id"],
+        )
+        return response["id"]
 
     def submit_job(
         self,
@@ -400,13 +397,12 @@ class EmrContainerHook(AwsBaseHook):
 
         if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
             raise AirflowException(f"Start Job Run failed: {response}")
-        else:
-            self.log.info(
-                "Start Job Run success - Job Id %s and virtual cluster id %s",
-                response["id"],
-                response["virtualClusterId"],
-            )
-            return response["id"]
+        self.log.info(
+            "Start Job Run success - Job Id %s and virtual cluster id %s",
+            response["id"],
+            response["virtualClusterId"],
+        )
+        return response["id"]
 
     def get_job_failure_reason(self, job_id: str) -> str | None:
         """

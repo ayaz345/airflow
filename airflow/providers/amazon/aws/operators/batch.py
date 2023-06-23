@@ -336,14 +336,12 @@ class BatchOperator(BaseOperator):
                 self.waiters.wait_for_job(self.job_id, get_batch_log_fetcher=self._get_batch_log_fetcher)
             else:
                 self.hook.wait_for_job(self.job_id, get_batch_log_fetcher=self._get_batch_log_fetcher)
+        elif self.waiters:
+            self.waiters.wait_for_job(self.job_id)
         else:
-            if self.waiters:
-                self.waiters.wait_for_job(self.job_id)
-            else:
-                self.hook.wait_for_job(self.job_id)
+            self.hook.wait_for_job(self.job_id)
 
-        awslogs = self.hook.get_job_all_awslogs_info(self.job_id)
-        if awslogs:
+        if awslogs := self.hook.get_job_all_awslogs_info(self.job_id):
             self.log.info("AWS Batch job (%s) CloudWatch Events details found. Links to logs:", self.job_id)
             link_builder = CloudWatchEventsLink()
             for log in awslogs:
@@ -366,19 +364,17 @@ class BatchOperator(BaseOperator):
         self.log.info("AWS Batch job (%s) succeeded", self.job_id)
 
     def _get_batch_log_fetcher(self, job_id: str) -> AwsTaskLogFetcher | None:
-        awslog_info = self.hook.get_job_awslogs_info(job_id)
-
-        if not awslog_info:
+        if awslog_info := self.hook.get_job_awslogs_info(job_id):
+            return AwsTaskLogFetcher(
+                aws_conn_id=self.aws_conn_id,
+                region_name=awslog_info["awslogs_region"],
+                log_group=awslog_info["awslogs_group"],
+                log_stream_name=awslog_info["awslogs_stream_name"],
+                fetch_interval=self.awslogs_fetch_interval,
+                logger=self.log,
+            )
+        else:
             return None
-
-        return AwsTaskLogFetcher(
-            aws_conn_id=self.aws_conn_id,
-            region_name=awslog_info["awslogs_region"],
-            log_group=awslog_info["awslogs_group"],
-            log_stream_name=awslog_info["awslogs_stream_name"],
-            fetch_interval=self.awslogs_fetch_interval,
-            logger=self.log,
-        )
 
 
 class BatchCreateComputeEnvironmentOperator(BaseOperator):

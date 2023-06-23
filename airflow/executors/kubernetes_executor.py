@@ -138,16 +138,18 @@ class KubernetesJobWatcher(multiprocessing.Process, LoggingMixin):
             else:
                 return watcher.stream(kube_client.list_namespaced_pod, self.namespace, **query_kwargs)
         except ApiException as e:
-            if e.status == 410:  # Resource version is too old
-                if self.namespace == ALL_NAMESPACES:
-                    pods = kube_client.list_pod_for_all_namespaces(watch=False)
-                else:
-                    pods = kube_client.list_namespaced_pod(namespace=self.namespace, watch=False)
-                resource_version = pods.metadata.resource_version
-                query_kwargs["resource_version"] = resource_version
-                return self._pod_events(kube_client=kube_client, query_kwargs=query_kwargs)
-            else:
+            if e.status != 410:
                 raise
+            pods = (
+                kube_client.list_pod_for_all_namespaces(watch=False)
+                if self.namespace == ALL_NAMESPACES
+                else kube_client.list_namespaced_pod(
+                    namespace=self.namespace, watch=False
+                )
+            )
+            resource_version = pods.metadata.resource_version
+            query_kwargs["resource_version"] = resource_version
+            return self._pod_events(kube_client=kube_client, query_kwargs=query_kwargs)
 
     def _run(
         self,
@@ -223,7 +225,10 @@ class KubernetesJobWatcher(multiprocessing.Process, LoggingMixin):
         pod = event["object"]
         annotations_string = annotations_for_logging_task_metadata(annotations)
         """Process status response."""
-        if status == "Pending":
+        if status == "Failed":
+            self.log.error("Event: %s Failed, annotations: %s", pod_name, annotations_string)
+            self.watcher_queue.put((pod_name, namespace, State.FAILED, annotations, resource_version))
+        elif status == "Pending":
             # deletion_timestamp is set by kube server when a graceful deletion is requested.
             # since kube server have received request to delete pod set TI state failed
             if event["type"] == "DELETED" and pod.metadata.deletion_timestamp:
@@ -231,9 +236,18 @@ class KubernetesJobWatcher(multiprocessing.Process, LoggingMixin):
                 self.watcher_queue.put((pod_name, namespace, State.FAILED, annotations, resource_version))
             else:
                 self.log.debug("Event: %s Pending, annotations: %s", pod_name, annotations_string)
-        elif status == "Failed":
-            self.log.error("Event: %s Failed, annotations: %s", pod_name, annotations_string)
-            self.watcher_queue.put((pod_name, namespace, State.FAILED, annotations, resource_version))
+        elif status == "Running":
+            # deletion_timestamp is set by kube server when a graceful deletion is requested.
+            # since kube server have received request to delete pod set TI state failed
+            if event["type"] == "DELETED" and pod.metadata.deletion_timestamp:
+                self.log.info(
+                    "Event: Pod %s deleted before it could complete, annotations: %s",
+                    pod_name,
+                    annotations_string,
+                )
+                self.watcher_queue.put((pod_name, namespace, State.FAILED, annotations, resource_version))
+            else:
+                self.log.info("Event: %s is Running, annotations: %s", pod_name, annotations_string)
         elif status == "Succeeded":
             # We get multiple events once the pod hits a terminal state, and we only want to
             # send it along to the scheduler once.
@@ -252,18 +266,6 @@ class KubernetesJobWatcher(multiprocessing.Process, LoggingMixin):
                 return
             self.log.info("Event: %s Succeeded, annotations: %s", pod_name, annotations_string)
             self.watcher_queue.put((pod_name, namespace, None, annotations, resource_version))
-        elif status == "Running":
-            # deletion_timestamp is set by kube server when a graceful deletion is requested.
-            # since kube server have received request to delete pod set TI state failed
-            if event["type"] == "DELETED" and pod.metadata.deletion_timestamp:
-                self.log.info(
-                    "Event: Pod %s deleted before it could complete, annotations: %s",
-                    pod_name,
-                    annotations_string,
-                )
-                self.watcher_queue.put((pod_name, namespace, State.FAILED, annotations, resource_version))
-            else:
-                self.log.info("Event: %s is Running, annotations: %s", pod_name, annotations_string)
         else:
             self.log.warning(
                 "Event: Invalid state: %s on pod: %s in namespace %s with annotations: %s with "
@@ -327,7 +329,6 @@ class AirflowKubernetesScheduler(LoggingMixin):
         return watcher
 
     def _make_kube_watchers(self) -> dict[str, KubernetesJobWatcher]:
-        watchers = {}
         if self.kube_config.multi_namespace_mode:
             namespaces_to_watch = (
                 self.kube_config.multi_namespace_mode_namespace_list
@@ -337,9 +338,10 @@ class AirflowKubernetesScheduler(LoggingMixin):
         else:
             namespaces_to_watch = [self.kube_config.kube_namespace]
 
-        for namespace in namespaces_to_watch:
-            watchers[namespace] = self._make_kube_watcher(namespace)
-        return watchers
+        return {
+            namespace: self._make_kube_watcher(namespace)
+            for namespace in namespaces_to_watch
+        }
 
     def _health_check_kube_watchers(self):
         for namespace, kube_watcher in self.kube_watchers.items():
@@ -362,7 +364,7 @@ class AirflowKubernetesScheduler(LoggingMixin):
 
         dag_id, task_id, run_id, try_number, map_index = key
 
-        if command[0:3] != ["airflow", "tasks", "run"]:
+        if command[:3] != ["airflow", "tasks", "run"]:
             raise ValueError('The command must start with ["airflow", "tasks", "run"].')
 
         base_worker_pod = get_base_pod_from_template(pod_template_file, self.kube_config)
@@ -461,8 +463,7 @@ class AirflowKubernetesScheduler(LoggingMixin):
             state,
             annotations_for_logging_task_metadata(annotations),
         )
-        key = annotations_to_key(annotations=annotations)
-        if key:
+        if key := annotations_to_key(annotations=annotations):
             self.log.debug("finishing job %s - %s (%s)", key, state, pod_name)
             self.result_queue.put((key, state, pod_name, namespace, resource_version))
 
@@ -600,7 +601,9 @@ class KubernetesExecutor(BaseExecutor):
                 kwargs.update(**self.kube_config.kube_client_request_args)
 
             # Try run_id first
-            kwargs["label_selector"] += ",run_id=" + pod_generator.make_safe_label_value(ti.run_id)
+            kwargs[
+                "label_selector"
+            ] += f",run_id={pod_generator.make_safe_label_value(ti.run_id)}"
             pod_list = self._list_pods(kwargs)
             if pod_list:
                 continue
@@ -783,10 +786,14 @@ class KubernetesExecutor(BaseExecutor):
         if self.kube_config.delete_worker_pods:
             if state != State.FAILED or self.kube_config.delete_worker_pods_on_failure:
                 self.kube_scheduler.delete_pod(pod_name=pod_name, namespace=namespace)
-                self.log.info("Deleted pod: %s in namespace %s", str(key), str(namespace))
+                self.log.info("Deleted pod: %s in namespace %s", str(key), namespace)
         else:
             self.kube_scheduler.patch_pod_executor_done(pod_name=pod_name, namespace=namespace)
-            self.log.info("Patched pod %s in namespace %s to mark it as done", str(key), str(namespace))
+            self.log.info(
+                "Patched pod %s in namespace %s to mark it as done",
+                str(key),
+                namespace,
+            )
 
         try:
             self.running.remove(key)
@@ -842,8 +849,7 @@ class KubernetesExecutor(BaseExecutor):
                 tail_lines=100,
                 _preload_content=False,
             )
-            for line in res:
-                log.append(remove_escape_codes(line.decode()))
+            log.extend(remove_escape_codes(line.decode()) for line in res)
             if log:
                 messages.append("Found logs through kube API")
         except Exception as e:

@@ -149,7 +149,7 @@ def get_unique_task_id(
             match = re.match(rf"^{prefix}__(\d+)$", task_id)
             if match is None:
                 continue
-            yield int(match.group(1))
+            yield int(match[1])
         yield 0  # Default if there's no matching task ID.
 
     core = re.split(r"__\d+$", task_id)[0]
@@ -239,21 +239,20 @@ class DecoratedOperator(BaseOperator):
                     self.outlets.append(item)
         if not self.multiple_outputs:
             return return_value
-        if isinstance(return_value, dict):
-            for key in return_value.keys():
-                if not isinstance(key, str):
-                    raise AirflowException(
-                        "Returned dictionary keys must be strings when using "
-                        f"multiple_outputs, found {key} ({type(key)}) instead"
-                    )
-            for key, value in return_value.items():
-                if isinstance(value, Dataset):
-                    self.outlets.append(value)
-                xcom_push(context, key, value)
-        else:
+        if not isinstance(return_value, dict):
             raise AirflowException(
                 f"Returned output was type {type(return_value)} expected dictionary for multiple_outputs"
             )
+        for key in return_value.keys():
+            if not isinstance(key, str):
+                raise AirflowException(
+                    "Returned dictionary keys must be strings when using "
+                    f"multiple_outputs, found {key} ({type(key)}) instead"
+                )
+        for key, value in return_value.items():
+            if isinstance(value, Dataset):
+                self.outlets.append(value)
+            xcom_push(context, key, value)
         return return_value
 
     def _hook_apply_defaults(self, *args, **kwargs):
@@ -330,7 +329,7 @@ class _TaskDecorator(ExpandableFactory, Generic[FParams, FReturn, OperatorSubcla
         except TypeError:  # Can't evaluate return type.
             return False
         ttype = getattr(return_type, "__origin__", return_type)
-        return ttype == dict or ttype == Dict
+        return ttype in [dict, Dict]
 
     def __attrs_post_init__(self):
         if "self" in self.function_signature.parameters:
@@ -481,7 +480,7 @@ class _TaskDecorator(ExpandableFactory, Generic[FParams, FReturn, OperatorSubcla
         self._validate_arg_names("partial", kwargs)
         old_kwargs = self.kwargs.get("op_kwargs", {})
         prevent_duplicates(old_kwargs, kwargs, fail_reason="duplicate partial")
-        kwargs.update(old_kwargs)
+        kwargs |= old_kwargs
         return attr.evolve(self, kwargs={**self.kwargs, "op_kwargs": kwargs})
 
     def override(self, **kwargs: Any) -> _TaskDecorator[FParams, FReturn, OperatorSubclass]:

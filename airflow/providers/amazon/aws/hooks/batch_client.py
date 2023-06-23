@@ -472,7 +472,7 @@ class BatchClientHook(AwsBaseHook):
             )
 
         # If the user selected another logDriver than "awslogs", then CloudWatch logging is disabled.
-        if any([c.get("logDriver", "awslogs") != "awslogs" for c in log_configs]):
+        if any(c.get("logDriver", "awslogs") != "awslogs" for c in log_configs):
             self.log.warning(
                 f"AWS Batch job ({job_id}) uses non-aws log drivers. AWS CloudWatch logging disabled."
             )
@@ -491,17 +491,19 @@ class BatchClientHook(AwsBaseHook):
         # cross stream names with options (i.e. attempts X nodes) to generate all log infos
         result = []
         for stream in stream_names:
-            for option in log_options:
-                result.append(
-                    {
-                        "awslogs_stream_name": stream,
-                        # If the user did not specify anything, the default settings are:
-                        #   awslogs-group = /aws/batch/job
-                        #   awslogs-region = `same as AWS Batch Job region`
-                        "awslogs_group": option.get("awslogs-group", "/aws/batch/job"),
-                        "awslogs_region": option.get("awslogs-region", self.conn_region_name),
-                    }
-                )
+            result.extend(
+                {
+                    "awslogs_stream_name": stream,
+                    # If the user did not specify anything, the default settings are:
+                    #   awslogs-group = /aws/batch/job
+                    #   awslogs-region = `same as AWS Batch Job region`
+                    "awslogs_group": option.get("awslogs-group", "/aws/batch/job"),
+                    "awslogs_region": option.get(
+                        "awslogs-region", self.conn_region_name
+                    ),
+                }
+                for option in log_options
+            )
         return result
 
     @staticmethod

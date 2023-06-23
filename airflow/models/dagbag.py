@@ -597,7 +597,7 @@ class DagBag(LoggingMixin):
         task_num = sum(o.task_num for o in stats)
         table = tabulate(stats, headers="keys")
 
-        report = textwrap.dedent(
+        return textwrap.dedent(
             f"""\n
         -------------------------------------------------------------------
         DagBag loading stats for {dag_folder}
@@ -607,7 +607,6 @@ class DagBag(LoggingMixin):
         DagBag parsing time: {duration}\n{table}
         """
         )
-        return report
 
     @classmethod
     @provide_session

@@ -572,7 +572,7 @@ class SageMakerHook(AwsBaseHook):
             try:
                 streams = logs_conn.describe_log_streams(
                     logGroupName=log_group,
-                    logStreamNamePrefix=job_name + "/",
+                    logStreamNamePrefix=f"{job_name}/",
                     orderBy="LogStreamName",
                     limit=instance_count,
                 )
@@ -585,7 +585,7 @@ class SageMakerHook(AwsBaseHook):
                 # the container starts logging, so ignore any errors thrown about that
                 pass
 
-        if len(stream_names) > 0:
+        if stream_names:
             for idx, event in self.multi_stream_iter(log_group, stream_names, positions):
                 self.log.info(event["message"])
                 ts, count = positions[stream_names[idx]]
@@ -842,10 +842,11 @@ class SageMakerHook(AwsBaseHook):
         """
         config, max_results = self._preprocess_list_request_args(name_contains, max_results, **kwargs)
         list_training_jobs_request = partial(self.get_conn().list_training_jobs, **config)
-        results = self._list_request(
-            list_training_jobs_request, "TrainingJobSummaries", max_results=max_results
+        return self._list_request(
+            list_training_jobs_request,
+            "TrainingJobSummaries",
+            max_results=max_results,
         )
-        return results
 
     def list_transform_jobs(
         self, name_contains: str | None = None, max_results: int | None = None, **kwargs
@@ -871,10 +872,11 @@ class SageMakerHook(AwsBaseHook):
         """
         config, max_results = self._preprocess_list_request_args(name_contains, max_results, **kwargs)
         list_transform_jobs_request = partial(self.get_conn().list_transform_jobs, **config)
-        results = self._list_request(
-            list_transform_jobs_request, "TransformJobSummaries", max_results=max_results
+        return self._list_request(
+            list_transform_jobs_request,
+            "TransformJobSummaries",
+            max_results=max_results,
         )
-        return results
 
     def list_processing_jobs(self, **kwargs) -> list[dict]:
         """Call boto3's `list_processing_jobs`.
@@ -893,10 +895,11 @@ class SageMakerHook(AwsBaseHook):
         :return: results of the list_processing_jobs request
         """
         list_processing_jobs_request = partial(self.get_conn().list_processing_jobs, **kwargs)
-        results = self._list_request(
-            list_processing_jobs_request, "ProcessingJobSummaries", max_results=kwargs.get("MaxResults")
+        return self._list_request(
+            list_processing_jobs_request,
+            "ProcessingJobSummaries",
+            max_results=kwargs.get("MaxResults"),
         )
-        return results
 
     def _preprocess_list_request_args(
         self, name_contains: str | None = None, max_results: int | None = None, **kwargs
@@ -927,7 +930,7 @@ class SageMakerHook(AwsBaseHook):
             max_results = kwargs["MaxResults"]
             del kwargs["MaxResults"]
 
-        config.update(kwargs)
+        config |= kwargs
 
         return config, max_results
 
@@ -1274,13 +1277,13 @@ class SageMakerHook(AwsBaseHook):
         if compressed_input:
             input_data[0]["CompressionType"] = "Gzip"
         if time_limit:
-            params_dict.update(
-                {"AutoMLJobConfig": {"CompletionCriteria": {"MaxAutoMLJobRuntimeInSeconds": time_limit}}}
-            )
+            params_dict["AutoMLJobConfig"] = {
+                "CompletionCriteria": {"MaxAutoMLJobRuntimeInSeconds": time_limit}
+            }
         if autodeploy_endpoint_name:
-            params_dict.update({"ModelDeployConfig": {"EndpointName": autodeploy_endpoint_name}})
+            params_dict["ModelDeployConfig"] = {"EndpointName": autodeploy_endpoint_name}
         if extras:
-            params_dict.update(extras)
+            params_dict |= extras
 
         # returns the job ARN, but we don't need it because we access it by its name
         self.conn.create_auto_ml_job(**params_dict)

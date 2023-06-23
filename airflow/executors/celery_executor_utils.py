@@ -113,8 +113,7 @@ def execute_command(command_to_exec: CommandType) -> None:
 
 
 def _execute_in_fork(command_to_exec: CommandType, celery_task_id: str | None = None) -> None:
-    pid = os.fork()
-    if pid:
+    if pid := os.fork():
         # In parent, wait for the child
         pid, ret = os.waitpid(pid, 0)
         if ret == 0:
@@ -267,8 +266,7 @@ class BulkStateFetcher(LoggingMixin):
     ) -> Mapping[str, EventBufferValueType]:
         state_info: MutableMapping[str, EventBufferValueType] = {}
         for task_id in task_ids:
-            task_result = task_results_by_task_id.get(task_id)
-            if task_result:
+            if task_result := task_results_by_task_id.get(task_id):
                 state = task_result["status"]
                 info = None if not hasattr(task_result, "info") else task_result["info"]
             else:

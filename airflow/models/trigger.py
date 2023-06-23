@@ -222,12 +222,11 @@ class Trigger(Base):
             )
         ]
 
-        # Find triggers who do NOT have an alive triggerer_id, and then assign
-        # up to `capacity` of those to us.
-        trigger_ids_query = cls.get_sorted_triggers(
-            capacity=capacity, alive_triggerer_ids=alive_triggerer_ids, session=session
-        )
-        if trigger_ids_query:
+        if trigger_ids_query := cls.get_sorted_triggers(
+            capacity=capacity,
+            alive_triggerer_ids=alive_triggerer_ids,
+            session=session,
+        ):
             session.query(cls).filter(cls.id.in_([i.id for i in trigger_ids_query])).update(
                 {cls.triggerer_id: triggerer_id},
                 synchronize_session=False,

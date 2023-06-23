@@ -120,12 +120,10 @@ class S3TaskHandler(FileTaskHandler, LoggingMixin):
         logs = []
         messages = []
         bucket, prefix = self.hook.parse_s3_url(s3url=os.path.join(self.remote_base, worker_log_rel_path))
-        keys = self.hook.list_keys(bucket_name=bucket, prefix=prefix)
-        if keys:
+        if keys := self.hook.list_keys(bucket_name=bucket, prefix=prefix):
             keys = [f"s3://{bucket}/{key}" for key in keys]
             messages.extend(["Found logs in s3:", *[f"  * {x}" for x in sorted(keys)]])
-            for key in sorted(keys):
-                logs.append(self.s3_read(key, return_error=True))
+            logs.extend(self.s3_read(key, return_error=True) for key in sorted(keys))
         else:
             messages.append(f"No logs found on s3 for ti={ti}")
         return messages, logs
@@ -149,13 +147,13 @@ class S3TaskHandler(FileTaskHandler, LoggingMixin):
         messages, logs = self._read_remote_logs(ti, try_number, metadata)
         if logs:
             return "".join(f"*** {x}\n" for x in messages) + "\n".join(logs), {"end_of_log": True}
-        else:
-            if metadata and metadata.get("log_pos", 0) > 0:
-                log_prefix = ""
-            else:
-                log_prefix = "*** Falling back to local log\n"
-            local_log, metadata = super()._read(ti, try_number, metadata)
-            return f"{log_prefix}{local_log}", metadata
+        log_prefix = (
+            ""
+            if metadata and metadata.get("log_pos", 0) > 0
+            else "*** Falling back to local log\n"
+        )
+        local_log, metadata = super()._read(ti, try_number, metadata)
+        return f"{log_prefix}{local_log}", metadata
 
     def s3_log_exists(self, remote_log_location: str) -> bool:
         """

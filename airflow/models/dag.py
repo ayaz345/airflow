@@ -168,12 +168,10 @@ def _get_model_data_interval(
 ) -> DataInterval | None:
     start = timezone.coerce_datetime(getattr(instance, start_field_name))
     end = timezone.coerce_datetime(getattr(instance, end_field_name))
-    if start is None:
-        if end is not None:
-            raise InconsistentDataInterval(instance, start_field_name, end_field_name)
-        return None
-    elif end is None:
+    if start is None and end is not None or start is not None and end is None:
         raise InconsistentDataInterval(instance, start_field_name, end_field_name)
+    elif start is None:
+        return None
     return DataInterval(start, end)
 
 
@@ -615,8 +613,7 @@ class DAG(LoggingMixin):
         self.tags = tags or []
         self._task_group = TaskGroup.create_root(self)
         self.validate_schedule_and_params()
-        wrong_links = dict(self.iter_invalid_owner_links())
-        if wrong_links:
+        if wrong_links := dict(self.iter_invalid_owner_links()):
             raise AirflowException(
                 "Wrong link format was used for the owner. Use a valid link \n"
                 f"Bad formatted links are: {wrong_links}"
@@ -756,10 +753,10 @@ class DAG(LoggingMixin):
             permissions.DEPRECATED_ACTION_CAN_DAG_READ: permissions.ACTION_CAN_READ,
             permissions.DEPRECATED_ACTION_CAN_DAG_EDIT: permissions.ACTION_CAN_EDIT,
         }
-        updated_access_control = {}
-        for role, perms in access_control.items():
-            updated_access_control[role] = {new_perm_mapping.get(perm, perm) for perm in perms}
-
+        updated_access_control = {
+            role: {new_perm_mapping.get(perm, perm) for perm in perms}
+            for role, perms in access_control.items()
+        }
         if access_control != updated_access_control:
             warnings.warn(
                 "The 'can_dag_read' and 'can_dag_edit' permissions are deprecated. "
@@ -786,10 +783,7 @@ class DAG(LoggingMixin):
                 )
         message += " Please use `DAG.iter_dagrun_infos_between(..., align=False)` instead."
         warnings.warn(message, category=RemovedInAirflow3Warning, stacklevel=2)
-        if end_date is None:
-            coerced_end_date = timezone.utcnow()
-        else:
-            coerced_end_date = end_date
+        coerced_end_date = timezone.utcnow() if end_date is None else end_date
         it = self.iter_dagrun_infos_between(start_date, pendulum.instance(coerced_end_date), align=False)
         return [info.logical_date for info in it]
 
@@ -818,9 +812,7 @@ class DAG(LoggingMixin):
         )
         data_interval = self.infer_automated_data_interval(timezone.coerce_datetime(dttm))
         next_info = self.next_dagrun_info(data_interval, restricted=False)
-        if next_info is None:
-            return None
-        return next_info.data_interval.start
+        return None if next_info is None else next_info.data_interval.start
 
     def previous_schedule(self, dttm):
         from airflow.timetables.interval import _DataIntervalTimetable
@@ -971,18 +963,14 @@ class DAG(LoggingMixin):
         else:
             data_interval = self.infer_automated_data_interval(date_last_automated_dagrun)
         info = self.next_dagrun_info(data_interval)
-        if info is None:
-            return None
-        return info.run_after
+        return None if info is None else info.run_after
 
     @functools.cached_property
     def _time_restriction(self) -> TimeRestriction:
         start_dates = [t.start_date for t in self.tasks if t.start_date]
         if self.start_date is not None:
             start_dates.append(self.start_date)
-        earliest = None
-        if start_dates:
-            earliest = timezone.coerce_datetime(min(start_dates))
+        earliest = timezone.coerce_datetime(min(start_dates)) if start_dates else None
         latest = self.end_date
         end_dates = [t.end_date for t in self.tasks if t.end_date]
         if len(end_dates) == len(self.tasks):  # not exists null end_date
@@ -1109,9 +1097,7 @@ class DAG(LoggingMixin):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RemovedInAirflow3Warning)
             previous_of_following = self.previous_schedule(following)
-        if previous_of_following != dttm:
-            return following
-        return dttm
+        return following if previous_of_following != dttm else dttm
 
     @provide_session
     def get_last_dagrun(self, session=NEW_SESSION, include_externally_triggered=False):
@@ -1262,10 +1248,7 @@ class DAG(LoggingMixin):
         path = pathlib.Path(self.fileloc)
         try:
             rel_path = path.relative_to(self._processor_dags_folder or settings.DAGS_FOLDER)
-            if rel_path == pathlib.Path("."):
-                return path
-            else:
-                return rel_path
+            return path if rel_path == pathlib.Path(".") else rel_path
         except ValueError:
             # Not relative to DAGS_FOLDER.
             return path
@@ -1339,12 +1322,11 @@ class DAG(LoggingMixin):
             stacklevel=2,
         )
         if isinstance(self.schedule_interval, str) and self.schedule_interval in cron_presets:
-            _schedule_interval: ScheduleInterval = cron_presets.get(self.schedule_interval)
+            return cron_presets.get(self.schedule_interval)
         elif self.schedule_interval == "@once":
-            _schedule_interval = None
+            return None
         else:
-            _schedule_interval = self.schedule_interval
-        return _schedule_interval
+            return self.schedule_interval
 
     @provide_session
     def handle_callback(self, dagrun, success=True, reason=None, session=NEW_SESSION):
@@ -1386,11 +1368,7 @@ class DAG(LoggingMixin):
         """
         runs = DagRun.find(dag_id=self.dag_id, state=State.RUNNING)
 
-        active_dates = []
-        for run in runs:
-            active_dates.append(run.execution_date)
-
-        return active_dates
+        return [run.execution_date for run in runs]
 
     @provide_session
     def get_num_active_runs(self, external_trigger=None, only_running=True, session=NEW_SESSION):
@@ -1450,7 +1428,7 @@ class DAG(LoggingMixin):
         :param session:
         :return: The list of DagRuns found.
         """
-        dagruns = (
+        return (
             session.query(DagRun)
             .filter(
                 DagRun.dag_id == self.dag_id,
@@ -1459,8 +1437,6 @@ class DAG(LoggingMixin):
             )
             .all()
         )
-
-        return dagruns
 
     @provide_session
     def get_latest_execution_date(self, session: Session = NEW_SESSION) -> pendulum.DateTime | None:
@@ -1515,7 +1491,7 @@ class DAG(LoggingMixin):
             "cache_size": 0,
         }
         if self.jinja_environment_kwargs:
-            jinja_env_options.update(self.jinja_environment_kwargs)
+            jinja_env_options |= self.jinja_environment_kwargs
         env: jinja2.Environment
         if self.render_template_as_native_obj and not force_sandboxed:
             env = airflow.templates.NativeEnvironment(**jinja_env_options)
@@ -1563,7 +1539,7 @@ class DAG(LoggingMixin):
             .all()
         )
 
-        if len(execution_dates) == 0:
+        if not execution_dates:
             return self.get_task_instances(start_date=base_date, end_date=base_date, session=session)
 
         min_date: datetime | None = execution_dates[-1]._mapping.get(

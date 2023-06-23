@@ -461,10 +461,14 @@ class AppflowRecordsShortCircuitOperator(ShortCircuitOperator):
     def _get_target_execution_id(
         records: list[ExecutionRecordTypeDef], execution_id: str
     ) -> ExecutionRecordTypeDef | None:
-        for record in records:
-            if record.get("executionId") == execution_id:
-                return record
-        return None
+        return next(
+            (
+                record
+                for record in records
+                if record.get("executionId") == execution_id
+            ),
+            None,
+        )
 
     @cached_property
     def hook(self) -> AppflowHook:

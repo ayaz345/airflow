@@ -42,7 +42,7 @@ def rand_str(num):
 
 def add_pod_suffix(*, pod_name, rand_len=8, max_len=80):
     """Add random string to pod name while staying under max len."""
-    suffix = "-" + rand_str(rand_len)
+    suffix = f"-{rand_str(rand_len)}"
     return pod_name[: max_len - len(suffix)].strip("-.") + suffix
 
 
@@ -129,8 +129,4 @@ def get_logs_task_metadata() -> bool:
 
 
 def annotations_for_logging_task_metadata(annotation_set):
-    if get_logs_task_metadata():
-        annotations_for_logging = annotation_set
-    else:
-        annotations_for_logging = "<omitted>"
-    return annotations_for_logging
+    return annotation_set if get_logs_task_metadata() else "<omitted>"
